@@ -419,7 +419,7 @@
         <div class="settings-row">
           <div class="field">
             <label>URL Web App Apps Script</label>
-            <input type="text" id="fWebAppUrl" placeholder="https://script.google.com/macros/s/AKfycbxA2YXTbQQVryWVdgyg7Bh_Fwr2nyCd2cUELK0WWLu6f9UYH-Yhh3PC6xRIVqdt_GCuqQ/exec">
+            <input type="text" id="fWebAppUrl" placeholder="https://script.google.com/macros/s/…/exec">
           </div>
           <button class="btn btn-secondary" id="saveConfigBtn" style="flex-shrink:0;">Simpan</button>
           <button class="btn btn-secondary" id="testConfigBtn" style="flex-shrink:0;">Tes Koneksi</button>
@@ -527,7 +527,6 @@
 </div>
 
 <script>
- 
 const QC_DATA = {
   divisi_mesin: {
     "LOKAL": ["TF04","TF06","TF07","TF08","EXTR4P","EXTR5P"],
@@ -647,7 +646,13 @@ refreshShiftReadout();
 
 // ---------- Google Sheets connection ----------
 const CONFIG_KEY = 'qc_config:sheet_webapp_url';
-let sheetWebAppUrl = '';
+
+// Isi URL Web App Apps Script Anda di sini agar semua pengguna form ini
+// otomatis tersambung tanpa perlu menempel URL secara manual.
+// Contoh: 'https://script.google.com/macros/s/AKfycb.../exec'
+const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbxA2YXTbQQVryWVdgyg7Bh_Fwr2nyCd2cUELK0WWLu6f9UYH-Yhh3PC6xRIVqdt_GCuqQ/exec';
+
+let sheetWebAppUrl = DEFAULT_WEBAPP_URL;
 
 const connBadge = document.getElementById('connBadge');
 const connBadgeText = document.getElementById('connBadgeText');
@@ -655,6 +660,7 @@ const connDetailDot = document.getElementById('connDetailDot');
 const connDetailText = document.getElementById('connDetailText');
 const settingsCard = document.getElementById('settingsCard');
 const fWebAppUrl = document.getElementById('fWebAppUrl');
+
 document.getElementById('settingsHead').addEventListener('click', ()=>{
   settingsCard.classList.toggle('open');
 });
@@ -673,17 +679,31 @@ function setConnUi(state, text, detailText){
 }
 
 async function loadConfig(){
+  // 1) Coba pakai URL bawaan (hardcoded) dulu, supaya form langsung siap
+  //    dipakai walau dibuka sebagai file berdiri sendiri (di luar chat Claude),
+  //    di mana window.storage mungkin tidak tersedia.
+  if (DEFAULT_WEBAPP_URL){
+    sheetWebAppUrl = DEFAULT_WEBAPP_URL;
+    fWebAppUrl.value = DEFAULT_WEBAPP_URL;
+    setConnUi('idle', 'Google Sheets: URL bawaan aktif', 'Menggunakan URL Web App bawaan. Klik "Tes Koneksi" untuk memastikan sheet dapat dihubungi.');
+  }
+
+  // 2) Kalau ada URL lain yang pernah disimpan lewat panel pengaturan
+  //    (dan form ini dibuka lewat Claude / lingkungan yang mendukung window.storage),
+  //    itu akan menimpa URL bawaan di atas.
   try{
     const r = await window.storage.get(CONFIG_KEY, true);
     if (r && r.value){
       sheetWebAppUrl = r.value;
       fWebAppUrl.value = sheetWebAppUrl;
       setConnUi('idle', 'Google Sheets: URL tersimpan', 'URL tersimpan. Klik "Tes Koneksi" untuk memastikan sheet dapat dihubungi.');
-    } else {
+    } else if (!DEFAULT_WEBAPP_URL){
       setConnUi('idle', 'Google Sheets: belum disambungkan', 'Belum ada URL tersimpan.');
     }
   }catch(e){
-    setConnUi('idle', 'Google Sheets: belum disambungkan', 'Belum ada URL tersimpan.');
+    if (!DEFAULT_WEBAPP_URL){
+      setConnUi('idle', 'Google Sheets: belum disambungkan', 'Belum ada URL tersimpan.');
+    }
   }
 }
 
