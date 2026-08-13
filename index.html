@@ -527,6 +527,64 @@
 </div>
 
 <script>
+// ---------- Storage abstraction ----------
+// window.storage hanya tersedia saat form dibuka di dalam Claude.ai (chat/artifact).
+// Saat di-hosting sendiri (GitHub Pages, server lain, dsb), window.storage tidak ada,
+// jadi di sini kita otomatis beralih ke localStorage browser sebagai gantinya.
+// Catatan: localStorage bersifat per-perangkat/per-browser (tidak "shared" antar user),
+// tapi ini hanya memengaruhi tampilan Riwayat Laporan di form — data laporan yang
+// sesungguhnya tetap masuk ke Google Sheets lewat Apps Script.
+const hasCloudStorage = (typeof window !== 'undefined') && !!window.storage
+  && typeof window.storage.get === 'function';
+
+async function storageGet(key, shared){
+  if (hasCloudStorage){
+    try{ return await window.storage.get(key, shared); }
+    catch(e){ return null; }
+  }
+  try{
+    const v = localStorage.getItem(key);
+    return v !== null ? { key, value: v, shared } : null;
+  }catch(e){ return null; }
+}
+
+async function storageSet(key, value, shared){
+  if (hasCloudStorage){
+    try{ return await window.storage.set(key, value, shared); }
+    catch(e){ return null; }
+  }
+  try{
+    localStorage.setItem(key, value);
+    return { key, value, shared };
+  }catch(e){ return null; }
+}
+
+async function storageDelete(key, shared){
+  if (hasCloudStorage){
+    try{ return await window.storage.delete(key, shared); }
+    catch(e){ return null; }
+  }
+  try{
+    localStorage.removeItem(key);
+    return { key, deleted:true, shared };
+  }catch(e){ return null; }
+}
+
+async function storageList(prefix, shared){
+  if (hasCloudStorage){
+    try{ return await window.storage.list(prefix, shared); }
+    catch(e){ return { keys: [] }; }
+  }
+  try{
+    const keys = [];
+    for (let i=0; i<localStorage.length; i++){
+      const k = localStorage.key(i);
+      if (k && k.indexOf(prefix) === 0) keys.push(k);
+    }
+    return { keys };
+  }catch(e){ return { keys: [] }; }
+}
+
 const QC_DATA = {
   divisi_mesin: {
     "LOKAL": ["TF04","TF06","TF07","TF08","EXTR4P","EXTR5P"],
@@ -650,7 +708,8 @@ const CONFIG_KEY = 'qc_config:sheet_webapp_url';
 // Isi URL Web App Apps Script Anda di sini agar semua pengguna form ini
 // otomatis tersambung tanpa perlu menempel URL secara manual.
 // Contoh: 'https://script.google.com/macros/s/AKfycb.../exec'
-const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwD-6eD5J5sKmJCuyP6QXxcQi_gZkbIBsairO9oKY7jfmEk9AiCjRXl6-WJ4puTr6xCcg/exec';
+const DEFAULT_WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbzd-iJhgMgkeFlUf32T3pUzGHWHHprNOw7nSNbfgZjn/dev';
+
 let sheetWebAppUrl = DEFAULT_WEBAPP_URL;
 
 const connBadge = document.getElementById('connBadge');
@@ -691,7 +750,7 @@ async function loadConfig(){
   //    (dan form ini dibuka lewat Claude / lingkungan yang mendukung window.storage),
   //    itu akan menimpa URL bawaan di atas.
   try{
-    const r = await window.storage.get(CONFIG_KEY, true);
+    const r = await storageGet(CONFIG_KEY, true);
     if (r && r.value){
       sheetWebAppUrl = r.value;
       fWebAppUrl.value = sheetWebAppUrl;
@@ -713,7 +772,7 @@ document.getElementById('saveConfigBtn').addEventListener('click', async ()=>{
     return;
   }
   try{
-    await window.storage.set(CONFIG_KEY, url, true);
+    await storageSet(CONFIG_KEY, url, true);
     sheetWebAppUrl = url;
     setConnUi('idle', 'Google Sheets: URL tersimpan', 'Tersimpan. Klik "Tes Koneksi" untuk memastikan sheet dapat dihubungi.');
   }catch(e){
@@ -771,11 +830,11 @@ let entries = []; // {id, divisi, mesin, produk, temuan, solusi, operator, ttdQc
 async function loadEntries(){
   const logList = document.getElementById('logList');
   try{
-    const listRes = await window.storage.list(STORAGE_PREFIX, true);
+    const listRes = await storageList(STORAGE_PREFIX, true);
     const keys = (listRes && listRes.keys) || [];
     const results = await Promise.all(keys.map(async k=>{
       try{
-        const r = await window.storage.get(k, true);
+        const r = await storageGet(k, true);
         return r ? JSON.parse(r.value) : null;
       }catch(e){ return null; }
     }));
@@ -827,7 +886,7 @@ function renderLog(){
       const id = btn.getAttribute('data-del');
       btn.disabled = true;
       try{
-        await window.storage.delete(STORAGE_PREFIX+id, true);
+        await storageDelete(STORAGE_PREFIX+id, true);
         entries = entries.filter(x=>x.id!==id);
         renderLog();
       }catch(e){
@@ -969,13 +1028,13 @@ document.getElementById('cfConfirm').addEventListener('click', async ()=>{
   const cfBtn = document.getElementById('cfConfirm');
   cfBtn.disabled = true; cfBtn.textContent = 'Menyimpan…';
   try{
-    const res = await window.storage.set(STORAGE_PREFIX+entry.id, JSON.stringify(entry), true);
+    const res = await storageSet(STORAGE_PREFIX+entry.id, JSON.stringify(entry), true);
     if (!res) throw new Error('empty response');
 
     // attempt to push to connected Google Sheet (non-blocking for local save)
     const synced = await pushToSheet(entry);
     entry.synced = synced;
-    await window.storage.set(STORAGE_PREFIX+entry.id, JSON.stringify(entry), true);
+    await storageSet(STORAGE_PREFIX+entry.id, JSON.stringify(entry), true);
 
     entries.unshift(entry);
     renderLog();
