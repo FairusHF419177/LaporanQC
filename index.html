@@ -396,6 +396,22 @@
   }
   .conn-status-line .conn-dot{width:8px;height:8px;}
 
+  /* shift summary (untuk WhatsApp) */
+  .summary-box{
+    background:var(--surface-2); border:1px dashed var(--line); border-radius:8px;
+    padding:12px 13px; margin-bottom:16px;
+  }
+  .summary-head{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px;}
+  .summary-head h3{
+    font-family:'Archivo Expanded',sans-serif; font-size:12px; letter-spacing:.03em;
+    text-transform:uppercase; margin:0; color:var(--steel);
+  }
+  .summary-pre{
+    white-space:pre-wrap; word-break:break-word;
+    font-family:'IBM Plex Mono',monospace; font-size:12.5px; line-height:1.65;
+    margin:0; color:var(--ink); max-height:260px; overflow-y:auto;
+  }
+
   /* ---------- Mobile responsiveness ---------- */
   @media (max-width: 640px){
     body{padding:12px 10px 48px;}
@@ -460,7 +476,7 @@
 <div class="wrap">
 
   <div class="topbar">
-    <div class="eyebrow">Laporan Quality Control · Lini Produksi</div>
+    <div class="eyebrow">Laporan Quality Control · Lini Produksi · Waktu WIB</div>
     <div class="title-row">
       <h1>Form Laporan QC</h1>
       <div class="clock">
@@ -470,9 +486,9 @@
     </div>
     <div class="shift-gauge">
       <div class="shift-track">
-        <div class="seg" data-shift="1" style="flex:8;"><span class="seg-label">SHIFT 1</span><span class="seg-time">08:00–16:00</span></div>
-        <div class="seg" data-shift="2" style="flex:6;"><span class="seg-label">SHIFT 2</span><span class="seg-time">16:00–22:00</span></div>
-        <div class="seg" data-shift="3" style="flex:10;"><span class="seg-label">SHIFT 3</span><span class="seg-time">22:00–08:00</span></div>
+        <div class="seg" data-shift="1" style="flex:1;"><span class="seg-label">SHIFT 1</span><span class="seg-time">06:00–14:00</span></div>
+        <div class="seg" data-shift="2" style="flex:1;"><span class="seg-label">SHIFT 2</span><span class="seg-time">14:00–22:00</span></div>
+        <div class="seg" data-shift="3" style="flex:1;"><span class="seg-label">SHIFT 3</span><span class="seg-time">22:00–06:00</span></div>
       </div>
       <div class="marker" id="nowMarker"></div>
     </div>
@@ -571,6 +587,29 @@
       </div>
       <div id="logList"><div class="loading">Memuat data…</div></div>
     </div>
+  </div>
+
+  <!-- PREVIOUS SHIFT (langsung dari Google Sheets, gabungan semua user) -->
+  <div class="card" id="prevShiftCard" style="margin-top:18px;">
+    <div class="log-head">
+      <div>
+        <h2 style="margin:0;">Laporan Shift Sebelumnya</h2>
+        <div class="hint" id="prevShiftRangeLabel" style="margin:4px 0 0;">–</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="count-pill" id="prevShiftCountPill">0</span>
+        <button class="btn btn-secondary" id="refreshPrevShiftBtn">↻ Muat Ulang</button>
+      </div>
+    </div>
+    <div class="summary-box" id="summaryBox">
+      <div class="summary-head">
+        <h3>Rangkuman untuk WhatsApp</h3>
+        <button class="btn-copy" id="copySummaryBtn">⧉ Salin Rangkuman</button>
+      </div>
+      <pre class="summary-pre" id="summaryPreview">–</pre>
+    </div>
+
+    <div id="prevShiftList"><div class="loading">Menyambungkan ke Google Sheets…</div></div>
   </div>
 
 </div>
@@ -681,20 +720,56 @@ const QC_DATA = {
   }
 };
 
-// ---------- helpers ----------
+// ---------- helpers (semua waktu dihitung eksplisit sebagai WIB / Asia-Jakarta, UTC+7) ----------
+
+// Ambil komponen tanggal & jam suatu Date pada zona waktu WIB, apa pun zona waktu perangkat.
+function getWIBParts(date){
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta', hour12: false,
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit'
+  });
+  const map = {};
+  fmt.formatToParts(date).forEach(p => { if (p.type !== 'literal') map[p.type] = parseInt(p.value, 10); });
+  if (map.hour === 24) map.hour = 0; // beberapa runtime melaporkan tengah malam sebagai jam 24
+  return map;
+}
+
+// Bangun Date (instant UTC yang benar) dari komponen tanggal/jam yang dimaksud sebagai WIB.
+// WIB = UTC+7 sepanjang tahun (tidak ada DST), jadi cukup dikurangi 7 jam.
+function wibDateUTC(year, month, day, hour, minute){
+  return new Date(Date.UTC(year, month - 1, day, hour - 7, minute || 0, 0));
+}
+
 function calcShift(dateObj){
-  const mins = dateObj.getHours()*60 + dateObj.getMinutes();
-  if (mins >= 8*60 && mins < 16*60) return "1";
-  if (mins >= 16*60 && mins < 22*60) return "2";
-  return "3";
+  const p = getWIBParts(dateObj);
+  const mins = p.hour*60 + p.minute;
+  if (mins >= 6*60 && mins < 14*60) return "1";   // 06:00–14:00 WIB
+  if (mins >= 14*60 && mins < 22*60) return "2";  // 14:00–22:00 WIB
+  return "3";                                      // 22:00–06:00 WIB
 }
 function pad(n){ return String(n).padStart(2,'0'); }
+
+// Nilai untuk <input type="datetime-local">, selalu ditampilkan sebagai jam WIB saat ini.
 function toLocalInputValue(d){
-  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+  const p = getWIBParts(d);
+  return p.year+'-'+pad(p.month)+'-'+pad(p.day)+'T'+pad(p.hour)+':'+pad(p.minute);
 }
+
+// Kebalikannya: nilai dari <input type="datetime-local"> SELALU diperlakukan sebagai jam WIB
+// (bukan zona waktu perangkat), supaya hasilnya konsisten di perangkat mana pun.
+function parseWIBInputValue(str){
+  const [datePart, timePart] = str.split('T');
+  const [y,m,d] = datePart.split('-').map(Number);
+  const [hh,mm] = timePart.split(':').map(Number);
+  return wibDateUTC(y, m, d, hh, mm);
+}
+
 function fmtDisplay(d){
+  const p = getWIBParts(d);
   const days=['Min','Sen','Sel','Rab','Kam','Jum','Sab'];
-  return days[d.getDay()]+' '+pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+  const wd = new Date(Date.UTC(p.year, p.month-1, p.day)).getUTCDay();
+  return days[wd]+' '+pad(p.day)+'/'+pad(p.month)+'/'+p.year+' '+pad(p.hour)+':'+pad(p.minute)+' WIB';
 }
 function escapeHtml(s){
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -709,11 +784,12 @@ function csvEscape(s){
 const segs = document.querySelectorAll('.seg');
 function updateGauge(){
   const now = new Date();
+  const p = getWIBParts(now);
   document.getElementById('clockDate').textContent = fmtDisplay(now).split(' ').slice(0,2).join(' ');
-  document.getElementById('clockTime').textContent = pad(now.getHours())+':'+pad(now.getMinutes())+':'+pad(now.getSeconds());
+  document.getElementById('clockTime').textContent = pad(p.hour)+':'+pad(p.minute)+':'+pad(p.second)+' WIB';
   const shift = calcShift(now);
   segs.forEach(s => s.classList.toggle('active', s.dataset.shift === shift));
-  const pct = ((now.getHours()*60+now.getMinutes())/1440)*100;
+  const pct = ((p.hour*60+p.minute)/1440)*100;
   document.getElementById('nowMarker').style.left = 'calc(' + pct + '% - 1px)';
 }
 updateGauge();
@@ -767,7 +843,7 @@ const shiftColors = {'1':'var(--amber)','2':'var(--dusk)','3':'var(--night-2)'};
 
 function refreshShiftReadout(){
   if (!fTimestamp.value){ shiftReadout.textContent='–'; return; }
-  const d = new Date(fTimestamp.value);
+  const d = parseWIBInputValue(fTimestamp.value);
   const s = calcShift(d);
   shiftReadout.textContent = 'Shift ' + s;
   shiftDot.style.background = shiftColors[s];
@@ -897,6 +973,102 @@ async function pushToSheet(entry){
   }
 }
 
+// ---------- Laporan shift sebelumnya (baca langsung dari Google Sheets) ----------
+function getPreviousShiftRange(now){
+  const p = getWIBParts(now); // tanggal "hari ini" ditentukan berdasarkan kalender WIB
+  const shift = calcShift(now);
+  let start, end, label;
+
+  if (shift === '1'){
+    // sekarang shift 1 (06:00–14:00 WIB) -> sebelumnya shift 3 (22:00 kemarin – 06:00 hari ini WIB)
+    start = wibDateUTC(p.year, p.month, p.day - 1, 22, 0);
+    end = wibDateUTC(p.year, p.month, p.day, 6, 0);
+    label = 'Shift 3 · ' + fmtDisplay(start) + ' – ' + fmtDisplay(end);
+  } else if (shift === '2'){
+    // sekarang shift 2 (14:00–22:00 WIB) -> sebelumnya shift 1 (06:00–14:00 hari ini WIB)
+    start = wibDateUTC(p.year, p.month, p.day, 6, 0);
+    end = wibDateUTC(p.year, p.month, p.day, 14, 0);
+    label = 'Shift 1 · ' + fmtDisplay(start) + ' – ' + fmtDisplay(end);
+  } else {
+    // sekarang shift 3 (22:00–06:00 WIB) -> sebelumnya shift 2 (14:00–22:00 hari ini WIB)
+    start = wibDateUTC(p.year, p.month, p.day, 14, 0);
+    end = wibDateUTC(p.year, p.month, p.day, 22, 0);
+    label = 'Shift 2 · ' + fmtDisplay(start) + ' – ' + fmtDisplay(end);
+  }
+  return { start, end, label };
+}
+
+async function loadPreviousShift(){
+  const listEl = document.getElementById('prevShiftList');
+  const labelEl = document.getElementById('prevShiftRangeLabel');
+  const countEl = document.getElementById('prevShiftCountPill');
+  const { start, end, label } = getPreviousShiftRange(new Date());
+  labelEl.textContent = label;
+
+  if (!sheetWebAppUrl){
+    listEl.innerHTML = '<div class="empty">Belum tersambung ke Google Sheets.<br>Atur URL Web App di panel pengaturan pada bagian atas halaman.</div>';
+    countEl.textContent = '0';
+    renderShiftSummary([], label);
+    return;
+  }
+
+  listEl.innerHTML = '<div class="loading">Memuat laporan shift sebelumnya…</div>';
+  const url = sheetWebAppUrl + '?action=shiftData&start=' + encodeURIComponent(start.toISOString()) + '&end=' + encodeURIComponent(end.toISOString());
+
+  try{
+    const res = await fetch(url, { method:'GET' });
+    const json = await res.json().catch(()=>null);
+    if (!res.ok || !json || json.status !== 'ok'){
+      listEl.innerHTML = '<div class="empty">Gagal memuat data. ' + escapeHtml((json && json.message) || 'Periksa koneksi Google Sheets.') + '</div>';
+      countEl.textContent = '0';
+      renderShiftSummary([], label);
+      return;
+    }
+    const list = json.data || [];
+    countEl.textContent = list.length;
+    renderShiftSummary(list, label);
+    if (list.length === 0){
+      listEl.innerHTML = '<div class="empty">Belum ada laporan pada shift ini.</div>';
+      return;
+    }
+    listEl.innerHTML = list.map(e=>{
+      const d = new Date(e.timestamp);
+      const shiftClass = 'shift'+e.shift;
+      return `<div class="entry">
+        <div class="entry-top">
+          <div class="entry-tags">
+            <span class="tag">${escapeHtml(e.divisi)}</span>
+            <span class="tag">${escapeHtml(e.mesin)}</span>
+            <span class="tag">${escapeHtml(e.produk)}</span>
+            <span class="tag ${shiftClass}">SHIFT ${escapeHtml(e.shift)}</span>
+          </div>
+          <div class="entry-actions">
+            <button class="btn-copy" data-copyps="1" title="Salin sebagai teks">⧉ Salin</button>
+          </div>
+        </div>
+        <div class="entry-body">
+          <div><b>Temuan:</b> ${escapeHtml(e.temuan) || '–'}</div>
+          <div><b>Solusi:</b> ${escapeHtml(e.solusi) || '–'}</div>
+        </div>
+        <div class="entry-meta">
+          <span>Operator: ${escapeHtml(e.operator)||'–'} · QC: ${escapeHtml(e.ttdQc)||'–'}</span>
+          <span>${fmtDisplay(d)}</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    listEl.querySelectorAll('[data-copyps]').forEach((btn, idx)=>{
+      btn.addEventListener('click', ()=> copyEntryText(list[idx], btn));
+    });
+  }catch(e){
+    console.error('loadPreviousShift error', e);
+    listEl.innerHTML = '<div class="empty">Tidak bisa menghubungi Google Sheets. Coba klik Muat Ulang.</div>';
+    countEl.textContent = '0';
+  }
+}
+
+document.getElementById('refreshPrevShiftBtn').addEventListener('click', loadPreviousShift);
+
 // ---------- storage ----------
 const STORAGE_PREFIX = 'qc_input:';
 let entries = []; // {id, divisi, mesin, produk, temuan, solusi, operator, ttdQc, timestamp, shift}
@@ -997,8 +1169,7 @@ function entryToText(e){
   ].join('\n');
 }
 
-async function copyEntryText(e, btn){
-  const text = entryToText(e);
+async function copyPlainText(text, btn){
   const originalLabel = btn.textContent;
   try{
     if (navigator.clipboard && window.isSecureContext){
@@ -1025,6 +1196,68 @@ async function copyEntryText(e, btn){
     }, 1800);
   }
 }
+
+async function copyEntryText(e, btn){
+  await copyPlainText(entryToText(e), btn);
+}
+
+// ---------- rangkuman shift (untuk disalin ke WhatsApp) ----------
+function buildShiftSummaryText(list, rangeLabel){
+  const lines = [];
+  lines.push('*RANGKUMAN LAPORAN QC*');
+  lines.push(rangeLabel);
+  lines.push('Total laporan: ' + list.length);
+  lines.push('');
+
+  if (list.length === 0){
+    lines.push('Tidak ada laporan pada shift ini.');
+    return lines.join('\n');
+  }
+
+  const divisiOrder = ['LOKAL','EXPORT','PRINTING'];
+  const grouped = {};
+  list.forEach(e=>{
+    grouped[e.divisi] = grouped[e.divisi] || {};
+    grouped[e.divisi][e.mesin] = grouped[e.divisi][e.mesin] || [];
+    grouped[e.divisi][e.mesin].push(e);
+  });
+
+  const divisiKeys = Object.keys(grouped).sort((a,b)=>{
+    const ia = divisiOrder.indexOf(a), ib = divisiOrder.indexOf(b);
+    return (ia<0?99:ia) - (ib<0?99:ib);
+  });
+
+  divisiKeys.forEach(div=>{
+    lines.push('*'+div+'*');
+    const mesinKeys = Object.keys(grouped[div]).sort();
+    mesinKeys.forEach(mesin=>{
+      grouped[div][mesin].forEach(e=>{
+        let line = '• ' + mesin + ' (' + e.produk + '): ' + (e.temuan || '-');
+        if (e.solusi) line += ' → ' + e.solusi;
+        lines.push(line);
+        lines.push('Operator: ' + (e.operator || '-'));
+      });
+    });
+    lines.push('');
+  });
+
+  const qcs = [...new Set(list.map(e=>e.ttdQc).filter(Boolean))];
+  lines.push('QC: ' + (qcs.join(', ') || '-'));
+
+  return lines.join('\n').trim();
+}
+
+function renderShiftSummary(list, rangeLabel){
+  const pre = document.getElementById('summaryPreview');
+  const text = buildShiftSummaryText(list, rangeLabel);
+  pre.textContent = text;
+}
+
+document.getElementById('copySummaryBtn').addEventListener('click', function(){
+  const text = document.getElementById('summaryPreview').textContent;
+  if (!text){ return; }
+  copyPlainText(text, this);
+});
 
 // ---------- submit ----------
 const statusMsg = document.getElementById('statusMsg');
@@ -1060,7 +1293,7 @@ function validateForm(){
 document.getElementById('submitBtn').addEventListener('click', ()=>{
   if (!validateForm()) return;
 
-  const d = new Date(fTimestamp.value);
+  const d = parseWIBInputValue(fTimestamp.value);
   pendingEntry = {
     id: Date.now() + '_' + Math.random().toString(36).slice(2,8),
     divisi: fDivisi.value,
@@ -1131,11 +1364,12 @@ document.getElementById('cfConfirm').addEventListener('click', async ()=>{
 // ---------- export CSV ----------
 document.getElementById('exportBtn').addEventListener('click', ()=>{
   if (entries.length === 0){ showStatus('Belum ada data untuk diekspor.', false); return; }
-  const header = ['DIVISI','MESIN','PRODUK','TEMUAN','SOLUSI','OPERATOR MESIN','TTD QC','TIMESTAMP','SHIFT'];
+  const header = ['DIVISI','MESIN','PRODUK','TEMUAN','SOLUSI','OPERATOR MESIN','TTD QC','TIMESTAMP (WIB)','SHIFT'];
   const sorted = [...entries].sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
   const rows = sorted.map(e=>{
     const d = new Date(e.timestamp);
-    const ts = d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    const p = getWIBParts(d);
+    const ts = p.year+'-'+pad(p.month)+'-'+pad(p.day)+' '+pad(p.hour)+':'+pad(p.minute)+':'+pad(p.second);
     return [e.divisi,e.mesin,e.produk,e.temuan,e.solusi,e.operator,e.ttdQc,ts,e.shift].map(csvEscape).join(',');
   });
   const csv = [header.join(','), ...rows].join('\n');
@@ -1148,8 +1382,11 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
 });
 
 // ---------- init ----------
-loadConfig();
-loadEntries();
+(async ()=>{
+  await loadConfig();
+  loadEntries();
+  loadPreviousShift();
+})();
 </script>
 </body>
 </html>
